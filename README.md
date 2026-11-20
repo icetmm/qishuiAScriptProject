@@ -48,7 +48,7 @@ qishuiAScriptProject/
 
 1. 装 AScript App，开启**无障碍**权限
 2. 进 App 的「开发者」页，开启**设备服务**（默认端口 9096）
-3. 记下手机局域网 IP，如 `192.168.1.7`
+3. 记下手机局域网 IP，如 `192.168.1.100`
 
 ### 2. 电脑端
 
@@ -56,6 +56,8 @@ qishuiAScriptProject/
 2. 确认 `uvx --version` 可用
 3. 把手机 IP 填进 `.vscode/settings.json` 的 `ascript.deviceId`
 4. 手机和电脑连同一个 WiFi
+
+> `.vscode/settings.json` 里的 `192.168.1.100:9096` 是占位示例，请换成你自己手机的 IP 和端口。
 
 ### 3. 运行
 

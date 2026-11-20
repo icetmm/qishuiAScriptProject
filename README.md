@@ -1,146 +1,164 @@
-# 汽水音乐 iOS 自动化脚本
+# 汽水音乐 安卓自动化脚本
 
-基于 AScript 框架的 iOS 端自动化脚本，用于自动观看汽水音乐广告以获取免费听歌时长。
+基于 AScript 安卓引擎的自动化脚本，自动观看汽水音乐广告以获取免费听歌时长。
 
-## 功能特性
+> 本项目改造自 [wei6718189/qishuiAScriptProject](https://github.com/wei6718189/qishuiAScriptProject)（iOS 版），已适配安卓平台。原 iOS 代码保留在 `__init___ios_backup.py`。
 
-- 自动启动汽水音乐 App
-- 自动跳过开屏广告（paddleocr 精准识别）
-- 支持两种广告类型：视频广告 + 直播间广告
-- 广告结束后自动领取奖励（两步：点「领取成功」→ 点「领取奖励」）
-- 无限循环领取模式，直到当日额度用完
-- 全程 OCR + 图像识别，无需依赖控件树
+## 功能流程
 
-## 技术栈
-
-| 模块                            | 用途                                  |
-| ------------------------------- | ------------------------------------- |
-| `ascript.ios.system`            | 应用启动 / 屏幕尺寸 / 资源路径 / 通知 |
-| `ascript.ios.action`            | 点击等动作执行                        |
-| `ascript.ios.screen.Ocr`        | 文字识别（paddleocr / vision 双引擎） |
-| `ascript.ios.screen.FindImages` | 图像模板匹配（直播间关闭按钮等）      |
+```
+启动 App → 跳开屏广告 → 清弹窗 → 回到首页
+    ↓
+自动点右上角「免」字 → 进入广告
+    ↓
+┌──────────────────────────────────┐
+│  等广告倒计时结束（最长 60s）      │
+│         ↓                        │
+│  点右上角「领取成功」              │
+│         ↓                        │
+│  弹窗点「领取奖励」→ 自动进下一轮  │
+│         ↓                        │
+│  成功次数 +1，重复循环             │
+│                                  │
+│  连续 10 轮没领到 → 自动退出       │
+└──────────────────────────────────┘
+```
 
 ## 运行环境
 
-- **平台**：iOS（需 WebDriverAgent 连接）
-- **AScript 版本**：支持 `ascript.ios.*` 命名空间的版本
-- **OCR 引擎**：paddleocr（推荐，识别率高）或 vision（iOS16+ 原生）
-- **HID 点击通道**：建议配置 ESP32 BLE HID 或其他外接 HID 方案，避免 WDA click 被 App 检测拦截
+- **平台**：Android（实测 vivo V2055A / Android 14 / 1080×2400）
+- **AScript App**：4.0.17+，运行模式「无障碍模式」
+- **必需权限**：辅助功能（无障碍）、录屏授权、悬浮窗
+- **OCR 引擎**：paddle（百度 PP-OCR V5，默认）或 mlkit（谷歌，更快）
 
 ## 项目结构
 
 ```
 qishuiAScriptProject/
-├── __init__.py          # 脚本主入口（AScript 工程约定，必须叫这个名字）
-├── res/
-│   └── img/
-│       ├── logo.png
-│       ├── qishuiyinyue.png           # 汽水音乐桌面图标（兜底启动用）
-│       ├── img_zhibojian-close01.png  # 直播间关闭按钮模板图
-│       └── img_1785263403257.png
-├── .vscode/
-│   └── settings.json       # 项目配置（平台 / 设备地址 / Python 路径）
-├── .trae/
-│   └── rules/
-│       └── ascript.md      # AScript AI 编码规则
-└── .gitignore
+├── __init__.py              # 安卓版主入口（AScript 工程约定，必须叫这个名字）
+├── __init___ios_backup.py   # 原 iOS 版脚本备份
+├── res/img/                 # 图标与模板图（安卓版基本用不到）
+├── .vscode/settings.json    # 平台 / 设备地址 / Python 路径
+└── .trae/rules/ascript.md   # AScript AI 编码规则
 ```
 
 ## 快速开始
 
-### 1. 环境检查
+### 1. 手机端
 
-确保 AScript App 已安装在 iOS 设备上，且 WebDriverAgent 已启动并可访问。
+1. 装 AScript App，开启**无障碍**权限
+2. 进 App 的「开发者」页，开启**设备服务**（默认端口 9096）
+3. 记下手机局域网 IP，如 `192.168.1.7`
 
-```bash
-# 查看设备状态（AScript MCP 工具）
-get_device_status()
-```
+### 2. 电脑端
 
-### 2. 设备连接
+1. 装 VS Code + AScript 插件
+2. 确认 `uvx --version` 可用
+3. 把手机 IP 填进 `.vscode/settings.json` 的 `ascript.deviceId`
+4. 手机和电脑连同一个 WiFi
 
-```bash
-# 自动连接（推荐）
-auto_connect()
+### 3. 运行
 
-# 或手动连接（扫描后用 IP）
-scan_devices()
-connect_device(host="192.168.1.2", port=9096)
-```
+在 VS Code 里用 AScript 插件运行工程，或让 AI 调用 `run_project`。
 
-> 本项目 `.vscode/settings.json` 默认设备地址：`192.168.1.2:9096`
+## 让它自己跑（无人值守）
 
-### 3. 运行脚本
+脚本本身已经是全自动的（`AUTO_CLICK_MIAN = True`），启动后不用管。要彻底脱离电脑，按下面三步做。
 
-```bash
-# 方式一：直接运行工程
-run_project(project="qishuiAScriptProject")
+### 第一步：手机端直接运行
 
-# 方式二：先上传再运行
-upload_file(...)
-run_project(...)
-```
+1. 手机打开 **AScript App**
+2. 进「**工程管理**」→ 找到 `qishuiAScriptProject`
+3. 点 **运行**
 
-## 脚本流程
+工程已经上传到手机了，不需要电脑参与。运行后手机会自己点「免」字、看广告、领奖励，一直循环到当日额度用完（连续 10 轮没领到就自动退出）。
 
-```
-启动 App
-    ↓
-[用户手动进入第一个广告] 或 [脚本自动找入口]
-    ↓
-┌───────────────────────────────────────┐
-│         核心广告领取循环              │
-│                                       │
-│  等待广告倒计时结束（最长 30s）        │
-│    ├─ 视频广告：等「领取成功」出现     │
-│    └─ 直播间广告：关直播间 → 等领取   │
-│          ↓                            │
-│  步骤 1：点右上角「领取成功」          │
-│          ↓                            │
-│  步骤 2：点弹窗「领取奖励」→ 进下一轮 │
-│          ↓                            │
-│  成功次数 +1，重复循环                │
-│                                       │
-│  连续 10 轮无广告 → 自动退出          │
-└───────────────────────────────────────┘
-```
+### 第二步：系统设置防中断
+
+这几个设置不做，跑几分钟就会被系统掐掉：
+
+| 设置项 | 路径（vivo 为例） | 作用 |
+|--------|------------------|------|
+| 电池优化白名单 | 设置 → 电池 → 后台耗电管理 → AScript → 允许后台高耗电 | 防止后台被杀 |
+| 自启动 | 设置 → 应用管理 → AScript → 权限 → 自启动 | 允许后台存活 |
+| 保持唤醒 | 开发者选项 → 不锁定屏幕（充电时） | 双保险 |
+
+脚本内部已经调了 `Device.keep_screen_on()`，会保持屏幕常亮；每轮开始还会 `Device.wake_up()` 唤醒，所以息屏也能恢复。
+
+### 第三步（可选）：打包成独立 APK
+
+想更彻底、连 AScript App 都不用开：
+
+1. AScript App → 首页找到「**打包独立程序**」
+2. 选择 `qishuiAScriptProject` 工程
+3. 生成 APK 并安装
+
+打包后的 App 可以设桌面图标直接点、配合系统自启动实现开机跑。
+
+### 定时每天跑
+
+AScript 没有内置定时任务，用手机系统自带的能力：
+
+- **vivo**：设置 → 快捷与辅助 → 自动任务 → 新建（定时启动指定应用）
+- **第三方**：Tasker / MacroDroid 定时启动 AScript 并运行工程
 
 ## 关键配置
 
-修改 [__init__.py](file:///Users/weihua/Documents/qishuiMusic/qishuiMusic2/qishuiAScriptProject/__init__.py) 头部常量即可：
+打开 `__init__.py` 头部：
 
-| 常量             | 默认值             | 说明                                           |
-| ---------------- | ------------------ | ---------------------------------------------- |
-| `APP_NAME`       | `"汽水音乐"`       | App 名称（兜底用）                             |
-| `APP_BUNDLE_ID`  | `"com.soda.music"` | Bundle ID（优先使用，更稳定）                  |
-| `MAX_LOOP_COUNT` | `50`               | 最大循环次数（防死循环，实际核心循环另有限制） |
-| `LOOP_INTERVAL`  | `3`                | 主循环间隔秒数                                 |
-| `OCR_ENGINE`     | `"vision"`         | OCR 引擎：`"vision"` / `"paddle"` / `"mlkit"`  |
+| 常量 | 默认 | 说明 |
+|------|------|------|
+| `APP_PACKAGE` | `com.luna.music` | 安卓版汽水音乐包名 |
+| `AUTO_CLICK_MIAN` | `True` | 是否自动点「免」字（False = 你手动点第一次） |
+| `KEEP_SCREEN_ON` | `True` | 屏幕常亮，防息屏中断 |
+| `AUTO_RESTART_APP` | `True` | 连续失败时自动重启 App 恢复 |
+| `MIAN_X_RATIO` | `0.937` | 「免」字按钮相对屏幕 X 位置 |
+| `MIAN_Y_RATIO` | `0.063` | 「免」字按钮相对屏幕 Y 位置 |
+| `OCR_ENGINE` | `"paddle"` | OCR 引擎，识别不准可换 `"mlkit"` |
+| `LOOP_INTERVAL` | `3` | 每轮间隔秒数 |
+| `MAX_LOOP_COUNT` | `100` | 最大循环次数（约 40 分钟） |
+| `MAX_IDLE_ROUNDS` | `10` | 连续空跑多少轮退出（当日额度用完） |
 
-核心循环参数：
+## 与 iOS 版的主要差异
 
-| 常量              | 默认值 | 说明                                               |
-| ----------------- | ------ | -------------------------------------------------- |
-| `MAX_IDLE_ROUNDS` | `10`   | 连续多少轮没领到奖励后自动退出（判断当日额度用完） |
+| 项目 | iOS 版 | 安卓版 |
+|------|--------|--------|
+| 模块前缀 | `ascript.ios.*` | `ascript.android.*` |
+| 启动 App | `app_start(bundle_id=)` | `system.open(package)` |
+| 包名 | `com.soda.music` | `com.luna.music` |
+| 控件树 | WDA dump 不稳，走 OCR | 无障碍控件树，`Selector` 15ms 级 |
+| 「免」字定位 | OCR | **坐标**（该按钮是图片，无 text 属性） |
+| 点击通道 | WDA（易被检测） | 无障碍（不被检测） |
+| 屏幕尺寸 | `screen_size()` | `Device.display()` |
 
-## OCR 区域设计原则
+## 已知要点
 
-所有搜索区域都**基于屏幕百分比动态计算**，适配不同分辨率（iPhone SE ~ iPhone 15 Pro Max）。
+1. **「免」字是图片按钮**：控件树里 87 个节点都没有它，OCR 也识别不出（字体会被识别成乱码）。只能用坐标 `(1011, 151)` @ 1080×2400，代码里按屏幕比例换算。
+2. **倒计时文案**：`17秒后可领取奖励`，位于顶部 y≈40。
+3. **领取弹窗**：显示「再看1个视频得 / 今日免费听」，绿色「领取奖励」按钮在屏幕中央偏下。
+4. **广告底部有「立即下载」大按钮**：绝不能点，会跳到应用商店。代码里所有点击都限定在文字匹配上，不会误触。
+5. **不要写 `if __name__ == "__main__"`**：AScript 工程入口约定不同，主体代码直接写在顶层，末尾 `main()` 就是入口。
 
-| 区域             | 用途                           | 坐标范围近似         |
-| ---------------- | ------------------------------ | -------------------- |
-| 开屏跳过按钮     | 跳过广告                       | x:80%~97%, y:6%~10%  |
-| 中间「继续观看」 | 广告中途恢复（防误点底部下载） | x:7%~93%, y:25%~68%  |
-| 弹窗「领取奖励」 | 奖励按钮（仅限中间弹窗区）     | x:13%~87%, y:25%~70% |
+## 免责说明
 
-## 注意事项
+脚本仅用于自动化观看广告领取官方免费权益，请遵守汽水音乐用户协议。每日有领取上限，连续 10 轮领不到会自动退出，不要反复空跑。
 
-1. **点击通道**：iOS 的 WDA click 容易被 App 检测拦截，建议配置 ESP32 BLE HID（插件 id=103）或其他外接 HID 方案。
-2. **不要写 `if __name__ == "__main__"`**：AScript 工程入口不等于 `__main__`，主体代码直接写在顶层即可，[入口约定参考](file:///Users/weihua/Documents/qishuiMusic/qishuiMusic2/qishuiAScriptProject/.trae/rules/ascript.md#L3.4)。
-3. **资源文件**：`res/img/` 下的图标和模板图需要根据实际设备 UI 重新裁剪，分辨率不匹配会降低识别率。
-4. **当日额度**：汽水音乐每日有广告领取上限，连续 10 轮没领到会自动退出，不要反复空跑。
+## 致谢
 
-## 相关文档
+- 原项目：[wei6718189/qishuiAScriptProject](https://github.com/wei6718189/qishuiAScriptProject)（iOS 版）
+- 自动化框架：[AScript](https://www.ascript.cn)（Python 移动端自动化引擎）
 
-- [AScript 编码规则](file:///Users/weihua/Documents/qishuiMusic/qishuiMusic2/qishuiAScriptProject/.trae/rules/ascript.md)
-- 主脚本：[__init__.py](file:///Users/weihua/Documents/qishuiMusic/qishuiMusic2/qishuiAScriptProject/__init__.py)
+本项目在其基础上完成安卓平台适配，iOS 原版代码保留在 `__init___ios_backup.py`。
+
+## 更新记录
+
+### Android 适配版
+
+- 模块从 `ascript.ios.*` 迁移到 `ascript.android.*`
+- 包名改为安卓版 `com.luna.music`
+- 「免」字按钮改用比例坐标定位（实测为图片按钮，无 text 属性）
+- 利用无障碍控件树优先查找，OCR 作为兜底
+- 新增屏幕常亮、自动唤醒、连续失败自动重启 App
+- 新增 `AUTO_CLICK_MIAN` 全自动开关
+- 实测环境：vivo V2055A / Android 14 / 1080×2400，连续多轮领取成功
+

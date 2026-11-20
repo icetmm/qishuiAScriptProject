@@ -1,8 +1,21 @@
 # 汽水音乐 安卓自动化脚本
 
+![Platform](https://img.shields.io/badge/platform-Android-green)
+![Framework](https://img.shields.io/badge/framework-AScript-blue)
+![Based on](https://img.shields.io/badge/based%20on-iOS%20version-orange)
+![Python](https://img.shields.io/badge/python-3.x-yellow)
+
 基于 AScript 安卓引擎的自动化脚本，自动观看汽水音乐广告以获取免费听歌时长。
 
-> 本项目改造自 [wei6718189/qishuiAScriptProject](https://github.com/wei6718189/qishuiAScriptProject)（iOS 版），已适配安卓平台。原 iOS 代码保留在 `__init___ios_backup.py`。
+> ### 📌 来源声明
+>
+> **本项目改造自 [wei6718189/qishuiAScriptProject](https://github.com/wei6718189/qishuiAScriptProject)（iOS 版）**
+>
+> 原项目是 iOS 专用脚本，依赖 WebDriverAgent + `ascript.ios.*`。
+> 本项目在其基础上完成 **Android 平台适配**，改写为 `ascript.android.*`，
+> 原 iOS 代码完整保留在 [`__init___ios_backup.py`](./__init___ios_backup.py)。
+>
+> 感谢原作者 [@wei6718189](https://github.com/wei6718189) 的开源工作。
 
 ## 功能流程
 

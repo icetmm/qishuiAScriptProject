@@ -286,17 +286,125 @@ def wait_for_mian_button(timeout=60, allow_mian=True) -> bool:
 
 # ============== 阶段四：等待广告倒计时结束 ==============
 
-def check_and_click_continue_watching() -> bool:
+COUNTDOWN_KEYWORDS = ["秒后可领取", "秒后领取", "秒后关闭", "秒后获得"]
+
+# ---- 直播形式广告的坑（实测用户反馈）----
+# 1) 广告播放中途弹"继续互动 / 退出"选择，5 秒倒计时后自动进直播间
+#    → 必须点"退出"，点"继续互动"就进直播间了
+# 2) 已进入直播间 → 直播间不算广告时长，必须退出来才能继续看广告
+
+# 进直播间前的互动弹窗特征词
+LIVE_PROMPT_HINTS = [
+    "继续互动", "继续观看直播", "进入直播间", "秒后进入", "自动进入", "是否继续",
+]
+# 退出类按钮（按优先级尝试，绝不点含"继续/进入"的按钮）
+LIVE_EXIT_BUTTONS = [
+    "退出互动", "退出直播间", "退出", "不感兴趣", "取消", "关闭",
+]
+# 已在直播间内的特征词（只保留高特异性的，避免误判）
+LIVE_ROOM_HINTS = [
+    "更多直播", "说点什么", "在线观众", "直播间人数",
+]
+
+
+def scan_screen_texts():
+    """
+    一次全屏 OCR，返回 [(text, cx, cy), ...]。
+    比反复调用 Ocr.find 快很多 —— 直播广告只有 5 秒反应窗口，必须省时间。
+
+    注意：Ocr.find_all() 返回的是 dict 列表，而 Ocr.paddleocr() 返回的是 OcrText 对象，
+    这里两种都兼容，避免踩坑。
+    """
+    try:
+        items = Ocr.find_all()
+        if not items:
+            return []
+        out = []
+        for it in items:
+            try:
+                if isinstance(it, dict):
+                    txt = it.get("text", "") or ""
+                    cx = it.get("center_x", 0) or 0
+                    cy = it.get("center_y", 0) or 0
+                else:
+                    txt = getattr(it, "text", "") or ""
+                    cx = getattr(it, "center_x", 0) or 0
+                    cy = getattr(it, "center_y", 0) or 0
+                if txt:
+                    out.append((str(txt), int(cx), int(cy)))
+            except Exception:
+                continue
+        return out
+    except Exception as e:
+        log(f"  全屏 OCR 异常: {e}")
+        return []
+
+
+def handle_live_prompt(texts) -> bool:
+    """
+    处理"继续互动 / 退出"弹窗（进直播间之前的拦截点）。
+    在已识别的文字里找退出按钮，绝不点含"继续/进入"的。
+    返回 True 表示已点击退出。
+    """
+    for btn in LIVE_EXIT_BUTTONS:
+        for t, x, y in texts:
+            if btn in t and "继续" not in t and "进入" not in t:
+                log(f"    ⚠️  直播互动弹窗 → 点击退出 '{t}' @ ({x}, {y})")
+                safe_click(x, y, f"退出直播广告({btn})")
+                time.sleep(1.5)
+                return True
+    # 找不到退出按钮 → 返回键兜底
+    log("    未找到退出按钮，按返回键兜底")
+    try:
+        action.Key.back()
+        time.sleep(1.2)
+        return True
+    except Exception as e:
+        log(f"    返回键异常: {e}")
+    return False
+
+
+def handle_live_room(texts) -> bool:
+    """
+    处理已进入直播间的情况：直播间不算广告时长，必须退出。
+    优先点右上角关闭按钮，兜底按返回键。
+    """
+    for kw in ["关闭", "退出", "×", "✕"]:
+        for t, x, y in texts:
+            if kw in t and y < SCREEN_H * 0.20:
+                log(f"    ⚠️  已在直播间 → 点击右上角 '{t}' @ ({x}, {y})")
+                safe_click(x, y, f"关闭直播间({kw})")
+                time.sleep(1.5)
+                return True
+    log("    未找到关闭按钮，按返回键兜底")
+    try:
+        action.Key.back()
+        time.sleep(1.5)
+        return True
+    except Exception as e:
+        log(f"    返回键异常: {e}")
+    return False
+
+
+def check_and_click_continue_watching(texts=None) -> bool:
     """
     检测并点击屏幕中间的"继续观看"。
-    注意：只点中间区域，绝不点底部的广告下载按钮。
+    注意：
+      - 只点中间区域，绝不点底部的广告下载按钮
+      - 排除"继续观看直播"这类（点了会进直播间）
     """
-    rect_continue = [int(SCREEN_W * 0.07), int(SCREEN_H * 0.25),
-                     int(SCREEN_W * 0.93), int(SCREEN_H * 0.68)]
-    r = ocr_find("继续观看", rect=rect_continue)
-    if r:
-        log("  命中中间区'继续观看' → 点击恢复广告")
-        if safe_click(r["center_x"], r["center_y"], "继续观看(中间区)"):
+    if texts is None:
+        texts = scan_screen_texts()
+    for t, x, y in texts:
+        if "继续观看" not in t:
+            continue
+        if "直播" in t or "互动" in t:
+            log(f"  跳过 '{t}'（直播相关，点了会进直播间）")
+            continue
+        if not (SCREEN_H * 0.25 <= y <= SCREEN_H * 0.68):
+            continue
+        log(f"  命中中间区'继续观看' → 点击恢复广告")
+        if safe_click(x, y, "继续观看(中间区)"):
             time.sleep(2.5)
             return True
     return False
@@ -305,53 +413,59 @@ def check_and_click_continue_watching() -> bool:
 def wait_ad_countdown(timeout=30) -> bool:
     """
     等待广告倒计时结束，右上角出现"领取成功"。
-    兼容两种广告：视频广告（倒计时）和直播间广告（需关闭直播间）。
+    每轮只做一次全屏 OCR，本地按优先级匹配：
+      1. "领取成功" → 成功
+      2. 直播互动弹窗 → 选退出（否则 5 秒后自动进直播间）
+      3. 已在直播间 → 退出（直播间不算广告时长）
+      4. 倒计时文案 → 仅日志
+      5. 中间"继续观看" → 点击恢复
     """
     log("阶段四：等待广告倒计时结束")
-    rect_claim_top = [int(SCREEN_W * 0.50), 0, SCREEN_W, int(SCREEN_H * 0.15)]
-    # 倒计时文案实测在顶部 y≈40-70（"17秒后可领取奖励"），区域放宽到顶部 12%
-    rect_countdown = [int(SCREEN_W * 0.40), 0, SCREEN_W, int(SCREEN_H * 0.12)]
-    rect_live_room = [int(SCREEN_W * 0.09), int(SCREEN_H * 0.61),
-                      int(SCREEN_W * 0.91), int(SCREEN_H * 0.79)]
-
     deadline = time.time() + timeout
     checks = 0
     last_sec = -1
 
     while time.time() < deadline:
         checks += 1
+        texts = scan_screen_texts()
+        if not texts:
+            time.sleep(0.5)
+            continue
+        joined = " | ".join(t for t, _, _ in texts)
 
-        if ocr_exists("领取成功", rect=rect_claim_top):
+        # 1) 最高优先：领取成功
+        if "领取成功" in joined:
             log(f"  检测到'领取成功'（轮询 {checks} 次）")
             return True
 
-        if ocr_exists("更多直播", rect=rect_claim_top) or ocr_exists("直播间", rect=rect_live_room):
-            log("  检测到直播间广告 → 尝试关闭")
-            closed = False
-            for kw in ["关闭", "×", "✕"]:
-                r = ocr_find(kw, rect=[int(SCREEN_W * 0.60), 0, SCREEN_W, int(SCREEN_H * 0.12)])
-                if r:
-                    safe_click(r["center_x"], r["center_y"], "关闭直播间")
-                    closed = True
-                    time.sleep(1.5)
-                    break
-            if closed:
+        # 2) 直播互动弹窗（进直播间前拦截）
+        if any(kw in joined for kw in LIVE_PROMPT_HINTS):
+            log(f"  ⚠️  识别到直播互动弹窗（轮询 {checks} 次）")
+            if handle_live_prompt(texts):
                 continue
 
-        r_cd = ocr_find("秒后", rect=rect_countdown)
-        if r_cd:
-            text = r_cd.get("text", "")
-            sec = None
-            for ch in text:
-                if ch.isdigit():
-                    sec = int(ch)
-                    break
-            if sec is not None and sec != last_sec:
-                log(f"  广告倒计时中... {text}")
-                last_sec = sec
+        # 3) 已在直播间
+        if any(kw in joined for kw in LIVE_ROOM_HINTS):
+            log(f"  ⚠️  识别到直播间界面（轮询 {checks} 次）")
+            if handle_live_room(texts):
+                continue
 
-        check_and_click_continue_watching()
-        time.sleep(0.8)
+        # 4) 倒计时文案（仅日志）
+        for t, x, y in texts:
+            if "秒后" in t and y < SCREEN_H * 0.12:
+                sec = None
+                for ch in t:
+                    if ch.isdigit():
+                        sec = int(ch)
+                        break
+                if sec is not None and sec != last_sec:
+                    log(f"  广告倒计时中... {t}")
+                    last_sec = sec
+                break
+
+        # 5) 广告中途被关，尝试恢复
+        check_and_click_continue_watching(texts)
+        time.sleep(0.6)
 
     log(f"  等待超时（{timeout}s），'领取成功'未出现")
     return False

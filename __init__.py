@@ -24,6 +24,12 @@ from ascript.android.system import R, Device  # type: ignore
 from ascript.android.screen import Ocr, FindImages  # type: ignore
 from ascript.android.node import Selector  # type: ignore
 
+# 多媒体模块（音量控制）；老设备没有时降级为 None，静音功能自动跳过
+try:
+    from ascript.android import media  # type: ignore
+except Exception:
+    media = None
+
 
 # ============== 全局配置 ==============
 
@@ -38,6 +44,12 @@ MAX_IDLE_ROUNDS = 10                # 连续多少轮没领到就退出（当日
 # 无人值守相关
 KEEP_SCREEN_ON = True               # 保持屏幕常亮，防止息屏中断
 AUTO_RESTART_APP = True             # 连续失败时自动重启 App
+
+# 静音广告：脚本运行期间把「媒体音量」调到 0，退出时自动恢复原音量
+# 只影响媒体音量(type=3)，不动铃声/来电/闹钟；广告声音走的就是媒体音量
+MUTE_ADS = True                     # True=静音广告；False=保留声音
+MUTE_RESTORE_VOLUME = True          # 退出时是否恢复原来的媒体音量
+MUTE_VOLUME_TYPE = 3                # 3=媒体音量（广告/音乐都走这个流）
 
 # OCR 引擎：paddle=百度 PP-OCR V5（准） / mlkit=谷歌（快）
 OCR_ENGINE = "paddle"
@@ -54,6 +66,7 @@ AUTO_CLICK_MIAN = True
 # 运行时全局
 SCREEN_W = 1080
 SCREEN_H = 2400
+_ORIGINAL_MEDIA_VOLUME = None       # 记录静音前的媒体音量，用于退出时恢复
 
 
 # ============== 工具函数 ==============
@@ -164,6 +177,60 @@ def init_regions():
     global SCREEN_W, SCREEN_H
     SCREEN_W, SCREEN_H = get_screen_size()
     log(f"屏幕尺寸: {SCREEN_W} x {SCREEN_H}")
+
+
+# ============== 静音广告（媒体音量） ==============
+
+def get_media_volume():
+    """读取当前媒体音量（0-100），失败返回 None"""
+    if media is None:
+        return None
+    try:
+        v = media.get_volume(MUTE_VOLUME_TYPE)
+        return int(v) if v is not None else None
+    except Exception as e:
+        log(f"  读取媒体音量失败: {e}")
+        return None
+
+
+def mute_ads():
+    """
+    静音广告：记下当前媒体音量，然后调到 0。
+    只动媒体音量(type=3)，不影响铃声/来电/闹钟。
+    """
+    global _ORIGINAL_MEDIA_VOLUME
+    if not MUTE_ADS:
+        log("静音广告已关闭（MUTE_ADS=False）")
+        return False
+    if media is None:
+        log("  当前设备不支持 media 模块，跳过静音")
+        return False
+    try:
+        cur = get_media_volume()
+        # 只在第一次静音时记录原音量，避免重复调用把 0 当成"原音量"
+        if _ORIGINAL_MEDIA_VOLUME is None and cur is not None and cur > 0:
+            _ORIGINAL_MEDIA_VOLUME = cur
+        media.volume(0, MUTE_VOLUME_TYPE)
+        log(f"🔇 广告已静音（媒体音量 0，静音前为 {_ORIGINAL_MEDIA_VOLUME if _ORIGINAL_MEDIA_VOLUME is not None else cur}）")
+        return True
+    except Exception as e:
+        log(f"  静音失败（不影响脚本运行）: {e}")
+        return False
+
+
+def restore_volume():
+    """退出时恢复静音前的媒体音量"""
+    global _ORIGINAL_MEDIA_VOLUME
+    if not MUTE_ADS or not MUTE_RESTORE_VOLUME:
+        return
+    if media is None or _ORIGINAL_MEDIA_VOLUME is None:
+        return
+    try:
+        media.volume(int(_ORIGINAL_MEDIA_VOLUME), MUTE_VOLUME_TYPE)
+        log(f"🔊 媒体音量已恢复为 {_ORIGINAL_MEDIA_VOLUME}")
+        _ORIGINAL_MEDIA_VOLUME = None
+    except Exception as e:
+        log(f"  恢复音量失败: {e}")
 
 
 # ============== 阶段一：启动 App ==============
@@ -631,6 +698,7 @@ def main():
             log(f"设置 OCR 引擎失败（用默认）: {e}")
 
         setup_unattended()
+        mute_ads()   # 静音广告（只静音媒体音量，铃声/来电不受影响）
 
         if not launch_app():
             log("❌ 无法启动汽水音乐，脚本终止")
@@ -668,6 +736,7 @@ def main():
         log(f"❌ 脚本异常: {e}")
         traceback.print_exc()
     finally:
+        restore_volume()   # 退出时恢复原来的媒体音量，避免手机一直静音
         log("脚本退出")
 
 

@@ -15,6 +15,7 @@
   → 等倒计时结束 → 点「领取成功」→ 点「领取奖励」→ 自动进下一轮 → 循环
 """
 
+import os
 import time
 import traceback
 
@@ -54,9 +55,17 @@ MUTE_VOLUME_TYPE = 3                # 3=媒体音量（广告/音乐都走这个
 # OCR 引擎：paddle=百度 PP-OCR V5（准） / mlkit=谷歌（快）
 OCR_ENGINE = "paddle"
 
-# "免"字按钮相对屏幕位置（实测 vivo V2055A 1080x2400：约 1012, 151）
-MIAN_X_RATIO = 0.937
-MIAN_Y_RATIO = 0.063
+# 广告入口"免费听"点击坐标
+# 旧版用比例坐标 (0.937,0.063)，在一加 1240x2772 上正好算出 (1161,174)
+# ——那是首页右上角搜索框，会误入搜索页卡死。已废弃。
+# 一加实测：首页歌曲卡片上的"免费听"按钮中心约 (900, 2253)。
+# 部署脚本会用 MCP dump_ui_tree 实时刷新到 coords.json；这里是不依赖电脑的默认值。
+MIAN_CLICK_X = 900
+MIAN_CLICK_Y = 2253
+COORDS_FILE = "coords.json"   # 可选：设备端工程目录里的 coords.json 覆盖坐标
+SEARCH_BAR_Y_MAX = 400        # y 小于此值视作顶部搜索栏区域，绝不点
+HERE_DIR = ""                 # 脚本运行目录（运行时由 os 填充）
+APP_PROJECT_DIR = "qishuiAScriptProject"
 
 # 是否自动点"免"字进入广告
 # True  = 全自动（脚本自己点，每轮都自动进广告）
@@ -173,9 +182,13 @@ def ocr_exists(text, rect=None, confidence=0.1):
 
 
 def init_regions():
-    """初始化屏幕尺寸"""
-    global SCREEN_W, SCREEN_H
+    """初始化屏幕尺寸和运行目录"""
+    global SCREEN_W, SCREEN_H, HERE_DIR
     SCREEN_W, SCREEN_H = get_screen_size()
+    try:
+        HERE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        HERE_DIR = "/storage/emulated/0/airscript/model/" + APP_PROJECT_DIR
     log(f"屏幕尺寸: {SCREEN_W} x {SCREEN_H}")
 
 
@@ -256,27 +269,140 @@ def launch_app() -> bool:
         return False
 
 
+# 搜索页特征词：误点右上角搜索框后会进到这些页面
+SEARCH_PAGE_HINTS = [
+    "搜索历史", "热门搜索", "搜索发现", "猜你想搜", "搜索歌曲",
+    "搜索歌手", "搜索结果", "清除搜索", "搜索音乐", "大家都在搜",
+]
+# 首页特征词（一加实测控件树里的真实文字）
+HOME_PAGE_HINTS = ["免费听", "发现", "模式选择", "听歌模式", "福利", "我的", "音乐", "推荐"]
+
+
+def get_screen_texts():
+    """
+    取当前屏幕文字：优先控件树（安卓准确、快、不受字体/背景影响），OCR 兜底。
+    返回 [(text, cx, cy), ...]。
+    """
+    out = []
+    try:
+        dump = Device.dump_ui() if hasattr(Device, "dump_ui") else None
+        nodes = []
+        if dump:
+            # 兼容不同返回结构
+            if isinstance(dump, dict):
+                nodes = dump.get("views") or dump.get("data") or []
+            elif isinstance(dump, list):
+                nodes = dump
+        def walk(ns):
+            for n in ns or []:
+                if not isinstance(n, dict):
+                    continue
+                t = n.get("text") or n.get("desc") or ""
+                if t:
+                    rect = n.get("rect") or {}
+                    cx = n.get("center_x") or (int(rect.get("left", 0)) + int(rect.get("right", 0))) // 2
+                    cy = n.get("center_y") or (int(rect.get("top", 0)) + int(rect.get("bottom", 0))) // 2
+                    out.append((str(t), int(cx), int(cy)))
+                walk(n.get("childs") or n.get("children") or [])
+        walk(nodes)
+    except Exception as e:
+        log(f"  控件树取值失败，改用 OCR: {e}")
+    if not out:
+        out = scan_screen_texts()
+    return out
+
+
+def is_search_page(texts=None) -> bool:
+    """判断是否停在搜索页/搜索结果页（误点搜索框后会到这里）"""
+    if texts is None:
+        texts = get_screen_texts()
+    hit = [t for t, _, _ in texts if any(k in t for k in SEARCH_PAGE_HINTS)]
+    if hit:
+        log(f"  检测到搜索页特征: {hit[:3]}")
+        return True
+    return False
+
+
+def is_home_page(texts=None) -> bool:
+    """
+    判断是否停在汽水音乐首页。
+    优先用 Selector 精确查找控件（本机实测控件树里有"免费听/发现/模式选择"），
+    OCR/控件树文字兜底。
+    """
+    for kw in ("免费听", "发现", "模式选择", "听歌模式"):
+        try:
+            if Selector().text(kw).find():
+                return True
+        except Exception:
+            pass
+    if texts is None:
+        texts = get_screen_texts()
+    joined = " | ".join(t for t, _, _ in texts)
+    return any(k in joined for k in HOME_PAGE_HINTS)
+
+
+def get_mian_coords():
+    """
+    取广告入口"免费听"的点击坐标。
+    1) 设备端 coords.json（部署脚本用 MCP 实时算好后写入）——最准，自适应坐标变化
+    2) 内置默认值 (900,2253)——一加实测，不依赖电脑也能跑
+    坐标一律做合法性校验：必须落在屏幕内、且 y > SEARCH_BAR_Y_MAX（绝不能是顶部搜索框）。
+    """
+    gx, gy = MIAN_CLICK_X, MIAN_CLICK_Y
+    try:
+        # 设备端工程目录里的 coords.json
+        import json as _json
+        for base in (HERE_DIR, "/storage/emulated/0/airscript/model/" + APP_PROJECT_DIR):
+            p = base.rstrip("/") + "/" + COORDS_FILE
+            try:
+                with open(p, encoding="utf-8") as f:
+                    d = _json.load(f)
+                if d and "x" in d and "y" in d:
+                    gx, gy = int(d["x"]), int(d["y"])
+                    log(f"  从 {COORDS_FILE} 读取坐标 ({gx},{gy})")
+                    break
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 合法性校验：屏幕内 + 不在顶部搜索栏区域
+    w, h = SCREEN_W, SCREEN_H
+    if not (0 < gx < w and SEARCH_BAR_Y_MAX < gy < h):
+        log(f"  ⚠️ 坐标 ({gx},{gy}) 不合法（超出屏幕或落在搜索栏区），回退默认值")
+        gx, gy = MIAN_CLICK_X, MIAN_CLICK_Y
+    return gx, gy
+
+
 def click_mian_button() -> bool:
     """
-    点击广告入口按钮。两种版本兼容：
-      - vivo 版：右上角"免"字图片按钮（无 text，只能按比例坐标）
-      - 一加/新版：歌曲卡片上的"免费听"文字按钮（OCR 可稳定识别）
-    策略：优先 OCR 找"免费听"→ 找到就点它；找不到再用比例坐标兜底。
+    点击广告入口按钮（新版汽水音乐入口是歌曲卡片上的"免费听"文字按钮）。
+    策略：先确保 App 在首页 → 取合法坐标（coords.json 或默认）→ 点击 →
+          点后若误入搜索页则重新打开 App 恢复。
+
+    ⚠️ 绝不点旧比例坐标：它在 1240x2772 上正好是右上角搜索框 (1161,174)。
     """
-    # 1) 优先：OCR 找"免费听"文字按钮（一加实测置信度 0.986）
-    for kw in ("免费听", "免听", "免费畅听"):
-        r = Ocr.find(kw)
-        if r:
-            cx = int(r.get("center_x", 0)) if isinstance(r, dict) else int(getattr(r, "center_x", 0))
-            cy = int(r.get("center_y", 0)) if isinstance(r, dict) else int(getattr(r, "center_y", 0))
-            if cx > 0 and cy > 0:
-                log(f"OCR 命中广告入口 '{kw}' -> ({cx}, {cy})")
-                return safe_click(cx, cy, f"广告入口({kw})")
-    # 2) 兜底：比例坐标（vivo 版右上角"免"字）
-    x = int(SCREEN_W * MIAN_X_RATIO)
-    y = int(SCREEN_H * MIAN_Y_RATIO)
-    log(f"未找到文字入口，用比例坐标点'免'字 -> ({x}, {y})")
-    return safe_click(x, y, "免字按钮")
+    # 1) 确保在首页：用 system.open 重新拉起 App（比返回键可靠，返回键会退到桌面）
+    if not ensure_home_page(reopen=True):
+        log("  ⚠️ 无法回到首页，跳过点击")
+        return False
+
+    # 2) 取坐标并点击（已做合法性校验，绝不会是搜索框位置）
+    gx, gy = get_mian_coords()
+    log(f"点击广告入口'免费听' -> ({gx}, {gy})")
+    ok = safe_click(gx, gy, "广告入口(免费听)")
+    time.sleep(1.5)
+
+    # 3) 点后校验：误入搜索页就重新打开 App 恢复，并报告失败
+    if is_search_page():
+        log("  ⚠️ 误入搜索页，重新打开 App 恢复")
+        try:
+            system.open(APP_PACKAGE)
+            time.sleep(3)
+        except Exception:
+            pass
+        return False
+    return ok
 
 
 # ============== 阶段二：开屏广告 & 弹窗清理 ==============
@@ -646,20 +772,35 @@ def run_ad_loop() -> int:
     return success_count
 
 
-def ensure_home_page(max_rounds=3) -> bool:
-    """确保停在汽水音乐首页，不在就按返回键退出弹窗/广告页"""
+def ensure_home_page(max_rounds=3, reopen=True) -> bool:
+    """
+    确保停在汽水音乐首页。
+    - reopen=True：优先用 system.open 重新拉起 App 回首页（可靠；返回键在
+      误入搜索页/桌面时可能一路退出 App，反而更糟）。
+    - 每轮都先判断是否已在首页，避免在首页还反复重启。
+    """
+    if is_home_page():
+        log("  已在首页")
+        return True
     for i in range(max_rounds):
-        if ocr_exists("模式探索") or ocr_exists("发现") or ocr_exists("音乐"):
-            log("  已在首页")
+        if reopen:
+            log(f"  未在首页，重新打开 App 回首页（{i + 1}/{max_rounds}）")
+            try:
+                system.open(APP_PACKAGE)
+            except Exception as e:
+                log(f"  打开 App 异常: {e}")
+            time.sleep(3)
+        else:
+            log(f"  未在首页，按返回键（{i + 1}/{max_rounds}）")
+            try:
+                action.Key.back()
+            except Exception as e:
+                log(f"  返回键异常: {e}")
+            time.sleep(1.5)
+        if is_home_page():
+            log("  已回到首页")
             return True
-        log(f"  未在首页，按返回键（{i + 1}/{max_rounds}）")
-        try:
-            action.Key.back()
-        except Exception as e:
-            log(f"  返回键异常: {e}")
-            break
-        time.sleep(1.5)
-    return ocr_exists("模式探索") or ocr_exists("发现")
+    return False
 
 
 def setup_unattended():

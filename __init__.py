@@ -191,13 +191,24 @@ def launch_app() -> bool:
 
 def click_mian_button() -> bool:
     """
-    点击右上角"免"字按钮。
-    实测该按钮是图片（无 text/desc 属性），OCR 也识别不出，只能用坐标。
-    位置按屏幕百分比动态计算，适配不同分辨率。
+    点击广告入口按钮。两种版本兼容：
+      - vivo 版：右上角"免"字图片按钮（无 text，只能按比例坐标）
+      - 一加/新版：歌曲卡片上的"免费听"文字按钮（OCR 可稳定识别）
+    策略：优先 OCR 找"免费听"→ 找到就点它；找不到再用比例坐标兜底。
     """
+    # 1) 优先：OCR 找"免费听"文字按钮（一加实测置信度 0.986）
+    for kw in ("免费听", "免听", "免费畅听"):
+        r = Ocr.find(kw)
+        if r:
+            cx = int(r.get("center_x", 0)) if isinstance(r, dict) else int(getattr(r, "center_x", 0))
+            cy = int(r.get("center_y", 0)) if isinstance(r, dict) else int(getattr(r, "center_y", 0))
+            if cx > 0 and cy > 0:
+                log(f"OCR 命中广告入口 '{kw}' -> ({cx}, {cy})")
+                return safe_click(cx, cy, f"广告入口({kw})")
+    # 2) 兜底：比例坐标（vivo 版右上角"免"字）
     x = int(SCREEN_W * MIAN_X_RATIO)
     y = int(SCREEN_H * MIAN_Y_RATIO)
-    log(f"点击'免'字按钮（比例坐标）-> ({x}, {y})")
+    log(f"未找到文字入口，用比例坐标点'免'字 -> ({x}, {y})")
     return safe_click(x, y, "免字按钮")
 
 
